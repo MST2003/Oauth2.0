@@ -380,5 +380,3 @@ Backend → Authorization Server (/revoke)
 | `/auth/logout`   | Logout endpoint                     | Browser → Backend              | No              |
 
 ---
-
-Would you like me to now **export this as a Markdown (`.md`) or PDF** with clear section headers and formatting (for internal documentation or onboarding)?
