@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>OAuth 2.0 + PKCE BFF Architecture</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <header>
+        <h1>OAuth 2.0 - Session Based (BFF) Architecture</h1>
+        <p>Secure authentication for modern web apps</p>
+        <button id="theme-toggle" aria-label="Toggle dark mode">🌙</button>
+    </header>
+    <main>
+        <section>
+            <h2 class="section-title"><span class="emoji">📋</span>Overview</h2>
+            <p>
+                The <strong>Backend-for-Frontend (BFF)</strong> pattern lets a web app authenticate users securely using
+                <strong>OAuth 2.0 Authorization Code Flow with PKCE</strong>, while keeping all sensitive tokens off the
+                browser.<br>
+                The <strong>frontend</strong> never sees or stores access/refresh tokens. Instead, the
+                <strong>backend</strong> handles all OAuth 2.0 communication, stores tokens securely, and exposes only a
+                short-lived <strong>HttpOnly session cookie</strong> to the browser.
+            </p>
+        </section>
+
+        <section>
+            <h2 class="section-title"><span class="emoji">🏗️</span>Architecture Components</h2>
+            <table>
+                <tr>
+                    <th>Component</th>
+                    <th>Responsibility</th>
+                </tr>
+                <tr>
+                    <td><strong>Frontend (Browser / React App)</strong></td>
+                    <td>Displays UI, triggers login, and calls backend APIs with session cookie. Never stores tokens.
+                    </td>
+                </tr>
+                <tr>
+                    <td><strong>Backend (BFF)</strong></td>
+                    <td>Handles PKCE generation, authorization code exchange, token refresh, token introspection, and
+                        revocation.</td>
+                </tr>
+                <tr>
+                    <td><strong>Authorization Server (AS)</strong></td>
+                    <td>Authenticates users, issues tokens, and exposes <code>/token</code>, <code>/introspect</code>,
+                        and <code>/revoke</code> endpoints.</td>
+                </tr>
+            </table>
+        </section>
+
+        <section>
+            <h2 class="section-title"><span class="emoji">🔐</span>Why PKCE?</h2>
+            <p>
+                <strong>PKCE</strong> (Proof Key for Code Exchange) prevents attackers from using stolen authorization
+                codes.<br>
+                It uses:
+            <ul>
+                <li>A <strong>code_verifier</strong>: random secret known only to backend.</li>
+                <li>A <strong>code_challenge</strong>: SHA-256 hash of the verifier sent to the Authorization Server.
+                </li>
+            </ul>
+            During token exchange, the backend must present the correct verifier — proving it was the original initiator
+            of the flow.
+            </p>
+        </section>
+
+        <section>
+            <h2 class="section-title"><span class="emoji">⚙️</span>Full OAuth 2.0 + PKCE Flow (Backend-For-Frontend)
+            </h2>
+            <ol>
+                <li>
+                    <strong>Step 1 – User Initiates Login</strong><br>
+                    The frontend redirects to:<br>
+                    <code>GET /auth/login</code><br>
+                    Backend generates a PKCE verifier, challenge, and state, stores them server-side, and responds with
+                    a 302 redirect to the Authorization Server.
+                </li>
+                <li>
+                    <strong>Step 2 – Backend Redirects to Authorization Server</strong><br>
+                    <pre>
+HTTP/1.1 302 Found
+Location: https://auth.thirdserver.com/authorize?
+response_type=code&
+client_id=backend-client-id&
+redirect_uri=https%3A%2F%2Fapp.example.com%2Fauth%2Fcallback&
+scope=openid%20profile%20email%20offline_access&
+state=abc123xyz&
+code_challenge=AbCdEf123...&
+code_challenge_method=S256
+Set-Cookie: bff_session=xyz789; HttpOnly; Secure; SameSite=Lax
+          </pre>
+                </li>
+                <li>
+                    <strong>Step 3 – User Authenticates</strong><br>
+                    The Authorization Server authenticates the user, then redirects back to your backend with an
+                    authorization code:<br>
+                    <code>https://app.example.com/auth/callback?code=auth_code_123&state=abc123xyz</code>
+                </li>
+                <li>
+                    <strong>Step 4 – Backend Exchanges Code for Tokens</strong><br>
+                    Backend verifies <code>state</code>, then exchanges the authorization code for tokens via a
+                    <strong>server-to-server</strong> request:<br>
+                    <pre>
+POST https://auth.thirdserver.com/token
+grant_type=authorization_code&
+code=auth_code_123&
+redirect_uri=https://app.example.com/auth/callback&
+client_id=backend-client-id&
+code_verifier=original_verifier
+          </pre>
+                    <strong>Response:</strong>
+                    <pre>
+{
+"access_token": "eyJhbGciOi...",
+"refresh_token": "def502...",
+"id_token": "eyJhbGciOi...",
+"expires_in": 3600
+}
+          </pre>
+                </li>
+                <li>
+                    Backend stores tokens securely (e.g., Redis, encrypted DB), then sets a secure session cookie.
+                </li>
+            </ol>
+        </section>
+
+        <section>
+            <h2 class="section-title"><span class="emoji">🌐</span>Browser Network Trace Summary</h2>
+            <table>
+                <tr>
+                    <th>#</th>
+                    <th>Step</th>
+                    <th>Initiator</th>
+                    <th>Description</th>
+                </tr>
+                <tr>
+                    <td>1</td>
+                    <td>/auth/login</td>
+                    <td>Browser → Backend</td>
+                    <td>Backend sets cookie, redirects to AS /authorize</td>
+                </tr>
+                <tr>
+                    <td>2</td>
+                    <td>/authorize</td>
+                    <td>Browser → Authorization Server</td>
+                    <td>User authenticates</td>
+                </tr>
+                <tr>
+                    <td>3</td>
+                    <td>/auth/callback</td>
+                    <td>Browser → Backend</td>
+                    <td>Authorization code returned</td>
+                </tr>
+                <tr>
+                    <td>4</td>
+                    <td>/token</td>
+                    <td>Backend → Authorization Server</td>
+                    <td>Token exchange (server-to-server)</td>
+                </tr>
+                <tr>
+                    <td>5</td>
+                    <td>/api/profile</td>
+                    <td>Browser → Backend</td>
+                    <td>Uses stored access token</td>
+                </tr>
+                <tr>
+                    <td>6</td>
+                    <td>/auth/logout</td>
+                    <td>Browser → Backend</td>
+                    <td>Clears session and revokes tokens</td>
+                </tr>
+            </table>
+        </section>
+
+        <section>
+            <h2 class="section-title"><span class="emoji">🧩</span>Redirect URI</h2>
+            <p>
+                <strong>Redirect URI</strong> is the endpoint on your backend that receives the authorization code after
+                a successful login.<br>
+                The Authorization Server will redirect the user’s browser to this URI with <code>code</code> and
+                <code>state</code> parameters.
+            </p>
+            <p><strong>Example:</strong> <code>https://app.example.com/auth/callback</code></p>
+            <ul>
+                <li>Must exactly match one of the registered redirect URIs in the Authorization Server.</li>
+                <li>Must use HTTPS in production.</li>
+                <li>Should point to a <strong>backend endpoint</strong>, not a frontend route.</li>
+                <li>Must validate <code>state</code> to prevent CSRF.</li>
+            </ul>
+            <p><strong>For local development:</strong> <code>http://localhost:8000/auth/callback</code></p>
+        </section>
+
+        <section>
+            <h2 class="section-title"><span class="emoji">🧱</span>Token Lifecycle</h2>
+            <table>
+                <tr>
+                    <th>Token</th>
+                    <th>Purpose</th>
+                    <th>Where stored</th>
+                    <th>Lifetime</th>
+                </tr>
+                <tr>
+                    <td>Access Token</td>
+                    <td>Authorize API calls</td>
+                    <td>Backend (in memory or DB)</td>
+                    <td>Short (e.g., 5–15 minutes)</td>
+                </tr>
+                <tr>
+                    <td>Refresh Token</td>
+                    <td>Obtain new access tokens</td>
+                    <td>Backend (encrypted)</td>
+                    <td>Long (e.g., 1–30 days)</td>
+                </tr>
+                <tr>
+                    <td>ID Token</td>
+                    <td>Identify user</td>
+                    <td>Backend session</td>
+                    <td>Short (e.g., same as access token)</td>
+                </tr>
+                <tr>
+                    <td>Session Cookie</td>
+                    <td>Identify user session</td>
+                    <td>Browser (HttpOnly)</td>
+                    <td>Matches refresh token lifetime</td>
+                </tr>
+            </table>
+            <p>The frontend only stores the <strong>session cookie</strong> — all tokens stay on the backend.</p>
+        </section>
+
+        <section>
+            <h2 class="section-title"><span class="emoji">🧰</span>Token Introspection</h2>
+            <p>
+                <strong>Token Introspection</strong> is a standard OAuth 2.0 mechanism (RFC 7662) that lets your backend
+                verify whether an <strong>access token</strong> (or refresh token) is still valid.
+            </p>
+            <pre>
+POST https://auth.thirdserver.com/introspect
+Authorization: Basic base64(client_id:client_secret)
+Content-Type: application/x-www-form-urlencoded
+
+token=&lt;access_token&gt;
+      </pre>
+            <strong>Example Response:</strong>
+            <pre>
+{
+  "active": true,
+  "scope": "openid profile email api.read",
+  "client_id": "backend-client-id",
+  "username": "alice@example.com",
+  "token_type": "access_token",
+  "exp": 1730906400,
+  "sub": "user123"
+}
+      </pre>
+            <ul>
+                <li>Checking if an access token is revoked or expired.</li>
+                <li>Enforcing logout or single-session policies.</li>
+                <li>Validating opaque (non-JWT) tokens.</li>
+            </ul>
+            <p>
+                <strong>Best Practice:</strong>
+            <ul>
+                <li>For JWT tokens, you can validate locally (signature, expiry).</li>
+                <li>For opaque tokens, use introspection.</li>
+                <li>Cache introspection results briefly (e.g., 30–60 seconds) to reduce load.</li>
+            </ul>
+            </p>
+        </section>
+
+        <section>
+            <h2 class="section-title"><span class="emoji">🔄</span>Token Revocation</h2>
+            <p>
+                <strong>Token Revocation</strong> (RFC 7009) allows the backend or the user to <strong>invalidate a
+                    token</strong> before its natural expiration time.<br>
+                Once revoked, the token cannot be used to access protected resources or obtain new tokens.
+            </p>
+            <pre>
+POST https://auth.thirdserver.com/revoke
+Authorization: Basic base64(client_id:client_secret)
+Content-Type: application/x-www-form-urlencoded
+
+token=&lt;refresh_token_or_access_token&gt;
+token_type_hint=refresh_token
+      </pre>
+            <ul>
+                <li>When the user logs out (<code>/auth/logout</code>).</li>
+                <li>When a refresh token rotation detects reuse.</li>
+                <li>When an administrator forces a sign-out.</li>
+                <li>When you suspect a token compromise.</li>
+            </ul>
+            <strong>Example Flow: Logout</strong>
+            <ol>
+                <li>User clicks “Logout”.</li>
+                <li>Frontend → Backend: <code>POST /auth/logout</code></li>
+                <li>Backend:
+                    <ul>
+                        <li>Looks up refresh token from session.</li>
+                        <li>Calls <code>/revoke</code> on Authorization Server.</li>
+                        <li>Deletes session from storage.</li>
+                        <li>Clears <code>bff_session</code> cookie.</li>
+                    </ul>
+                </li>
+            </ol>
+            <strong>Example Revocation Request</strong>
+            <pre>
+POST /revoke
+token=def502... (refresh_token)
+token_type_hint=refresh_token
+Authorization: Basic base64(client_id:client_secret)
+      </pre>
+            <strong>Response:</strong>
+            <pre>HTTP/1.1 200 OK</pre>
+            <p>The Authorization Server marks the token (and its descendants) as invalid.</p>
+        </section>
+
+        <section>
+            <h2 class="section-title"><span class="emoji">🧠</span>PKCE Recap with Example</h2>
+            <table>
+                <tr>
+                    <th>Step</th>
+                    <th>Parameter</th>
+                    <th>Description</th>
+                </tr>
+                <tr>
+                    <td>1</td>
+                    <td>code_verifier</td>
+                    <td>Random 43–128 character string generated by backend</td>
+                </tr>
+                <tr>
+                    <td>2</td>
+                    <td>code_challenge</td>
+                    <td>Base64URL(SHA256(verifier))</td>
+                </tr>
+                <tr>
+                    <td>3</td>
+                    <td>/authorize request</td>
+                    <td>Includes code_challenge and S256</td>
+                </tr>
+                <tr>
+                    <td>4</td>
+                    <td>/token exchange</td>
+                    <td>Includes code_verifier</td>
+                </tr>
+                <tr>
+                    <td>5</td>
+                    <td>Authorization Server</td>
+                    <td>Verifies hash matches → issues tokens</td>
+                </tr>
+            </table>
+            <pre>
+code_verifier = "abcxyz123secureverifier"
+code_challenge = Base64UrlEncode(SHA256("abcxyz123secureverifier"))
+      </pre>
+        </section>
+
+        <section>
+            <h2 class="section-title"><span class="emoji">🧩</span>Example Backend (Flask)</h2>
+            <pre>
+@app.route('/auth/login')
+def auth_login():
+    verifier = secrets.token_urlsafe(32)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b'=').decode()
+    state = secrets.token_urlsafe(16)
+    session_id = secrets.token_urlsafe(32)
+    store_session(session_id, {'code_verifier': verifier, 'state': state})
+    auth_url = (
+        f"{AS_AUTHORIZE}?response_type=code&client_id={CLIENT_ID}"
+        f"&redirect_uri={REDIRECT_URI}&scope=openid%20profile"
+        f"&state={state}&code_challenge={challenge}&code_challenge_method=S256"
+    )
+    resp = redirect(auth_url)
+    resp.set_cookie('bff_session', session_id, httponly=True, secure=True, samesite='Lax')
+    return resp
+      </pre>
+        </section>
+
+        <section>
+            <h2 class="section-title"><span class="emoji">🧾</span>Example Configuration for Authorization Server</h2>
+            <table>
+                <tr>
+                    <th>Field</th>
+                    <th>Example Value</th>
+                </tr>
+                <tr>
+                    <td>Client Type</td>
+                    <td>Confidential</td>
+                </tr>
+                <tr>
+                    <td>Client ID</td>
+                    <td>backend-client-id</td>
+                </tr>
+                <tr>
+                    <td>Redirect URIs</td>
+                    <td>https://app.example.com/auth/callback</td>
+                </tr>
+                <tr>
+                    <td>Allowed Scopes</td>
+                    <td>openid profile email offline_access</td>
+                </tr>
+                <tr>
+                    <td>Grant Types</td>
+                    <td>authorization_code, refresh_token</td>
+                </tr>
+                <tr>
+                    <td>PKCE Enforcement</td>
+                    <td>Required</td>
+                </tr>
+                <tr>
+                    <td>Token Endpoint Auth</td>
+                    <td>client_secret_basic or PKCE-only</td>
+                </tr>
+                <tr>
+                    <td>Access Token Lifetime</td>
+                    <td>15 minutes</td>
+                </tr>
+                <tr>
+                    <td>Refresh Token Lifetime</td>
+                    <td>30 days</td>
+                </tr>
+                <tr>
+                    <td>Introspection & Revocation</td>
+                    <td>Enabled</td>
+                </tr>
+            </table>
+        </section>
+
+        <section>
+            <h2 class="section-title"><span class="emoji">✅</span>Security Checklist</h2>
+            <table class="checklist">
+                <tr>
+                    <th>Category</th>
+                    <th>Recommendation</th>
+                </tr>
+                <tr>
+                    <td>HTTPS</td>
+                    <td>Always use HTTPS in production.</td>
+                </tr>
+                <tr>
+                    <td>Cookies</td>
+                    <td>HttpOnly, Secure, SameSite=Lax or Strict.</td>
+                </tr>
+                <tr>
+                    <td>PKCE</td>
+                    <td>Always use S256.</td>
+                </tr>
+                <tr>
+                    <td>State Validation</td>
+                    <td>Must match stored state.</td>
+                </tr>
+                <tr>
+                    <td>Access Tokens</td>
+                    <td>Short-lived (5–15 min).</td>
+                </tr>
+                <tr>
+                    <td>Refresh Tokens</td>
+                    <td>Long-lived with rotation.</td>
+                </tr>
+                <tr>
+                    <td>Storage</td>
+                    <td>Encrypt tokens at rest.</td>
+                </tr>
+                <tr>
+                    <td>Revocation</td>
+                    <td>Revoke tokens on logout.</td>
+                </tr>
+                <tr>
+                    <td>Introspection</td>
+                    <td>Use to validate opaque tokens.</td>
+                </tr>
+                <tr>
+                    <td>Logging</td>
+                    <td>Never log tokens.</td>
+                </tr>
+            </table>
+        </section>
+
+        <section>
+            <h2 class="section-title"><span class="emoji">🧾</span>Example Redirect URIs</h2>
+            <table>
+                <tr>
+                    <th>Environment</th>
+                    <th>Redirect URI</th>
+                </tr>
+                <tr>
+                    <td>Local Dev</td>
+                    <td>http://localhost:8000/auth/callback</td>
+                </tr>
+                <tr>
+                    <td>Staging</td>
+                    <td>https://staging.example.com/auth/callback</td>
+                </tr>
+                <tr>
+                    <td>Production</td>
+                    <td>https://app.example.com/auth/callback</td>
+                </tr>
+            </table>
+        </section>
+
+        <section>
+            <h2 class="section-title"><span class="emoji">🧩</span>Sequence Flow Diagram (Textual)</h2>
+            <div class="diagram">
+                User → Browser → Backend (/auth/login)<br>
+                Backend → Browser (302 to AS /authorize)<br>
+                Browser → Authorization Server (/authorize)<br>
+                User logs in<br>
+                AS → Browser (302 to /auth/callback?code=...)<br>
+                Browser → Backend (/auth/callback)<br>
+                Backend → Authorization Server (/token)<br>
+                AS → Backend (access_token + refresh_token)<br>
+                Backend → Browser (Set-Cookie session)<br>
+                Browser → Backend (/api/profile)<br>
+                Backend (uses tokens)<br>
+                Browser → Backend (/auth/logout)<br>
+                Backend → Authorization Server (/revoke)
+            </div>
+        </section>
+
+        <section>
+            <h2 class="section-title"><span class="emoji">🧭</span>Summary of Key Endpoints</h2>
+            <table>
+                <tr>
+                    <th>Endpoint</th>
+                    <th>Description</th>
+                    <th>Who Calls It</th>
+                    <th>Sensitive Data?</th>
+                </tr>
+                <tr>
+                    <td>/auth/login</td>
+                    <td>Starts login flow, generates PKCE</td>
+                    <td>Browser → Backend</td>
+                    <td>No</td>
+                </tr>
+                <tr>
+                    <td>/authorize</td>
+                    <td>Authorization request</td>
+                    <td>Browser → Authorization Server</td>
+                    <td>No</td>
+                </tr>
+                <tr>
+                    <td>/auth/callback</td>
+                    <td>Receives code, exchanges for tokens</td>
+                    <td>Browser → Backend</td>
+                    <td>Yes (code)</td>
+                </tr>
+                <tr>
+                    <td>/token</td>
+                    <td>Token exchange</td>
+                    <td>Backend → Authorization Server</td>
+                    <td>Yes</td>
+                </tr>
+                <tr>
+                    <td>/introspect</td>
+                    <td>Token validation</td>
+                    <td>Backend → Authorization Server</td>
+                    <td>Yes</td>
+                </tr>
+                <tr>
+                    <td>/revoke</td>
+                    <td>Token invalidation</td>
+                    <td>Backend → Authorization Server</td>
+                    <td>Yes</td>
+                </tr>
+                <tr>
+                    <td>/auth/logout</td>
+                    <td>Logout endpoint</td>
+                    <td>Browser → Backend</td>
+                    <td>No</td>
+                </tr>
+            </table>
+        </section>
+    </main>
+    <script>
+    const toggleBtn = document.getElementById('theme-toggle');
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const savedTheme = localStorage.getItem('theme');
+    function setTheme(dark) {
+      document.body.classList.toggle('dark-mode', dark);
+      toggleBtn.textContent = dark ? '☀️' : '🌙';
+      localStorage.setItem('theme', dark ? 'dark' : 'light');
+    }
+    setTheme(savedTheme ? savedTheme === 'dark' : prefersDark);
+    toggleBtn.onclick = () => setTheme(!document.body.classList.contains('dark-mode'));
+  </script>
+</body>
+
+</html>
